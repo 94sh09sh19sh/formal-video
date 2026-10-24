@@ -23,9 +23,9 @@ description: 製作要交給別人看或在會議上播的正式影片（展示�
 | 1 論述 | 選結構（新創 demo／學術／產品），排分鏡 | 每一段對應一個觀眾在意的問題 | `references/narrative.md` |
 | 2 查證 | 每個數字找原始出處，寫 `sources.md` | 每筆有網址、查詢日、原文摘錄 | `references/facts.md` |
 | 3 稿 | `script.md` 旁白表與分鏡表 | `fv lint` 全過 | `references/narrative.md` |
-| 4 聲音 | 切句對稿→微調→逐句合成→反聽 | 每句字錯率 ≤ 門檻；`fv timeline` 產生時間表 | `references/voice.md` |
-| 5 錄製 | Playwright 照腳本操作，DevTools 協定逐格錄 | 每鏡長度蓋得住對應旁白 | `references/capture.md` |
-| 6 合成 | HyperFrames：字卡、裝置外框、標註、出處、字幕 | `npx hyperframes check` 無錯 | `references/compose.md` |
+| 4 聲音 | 切句對稿→微調→逐句合成→反聽 | 每句字錯率 ≤ 門檻；`fv timeline` 產生時間表與逐字時間 | `references/voice.md` |
+| 5 錄製 | 照旁白時間表排每一個點擊（先看到按壓、才生效），DevTools 協定逐格錄 | `rec.at` 沒有「晚了」警告；每鏡蓋得住旁白 | `references/capture.md` |
+| 6 合成 | HyperFrames：字卡、裝置外框、標註（`lib/hf.mjs`）、出處、字幕 | `checkCallouts` 過、`npx hyperframes check` 無錯 | `references/compose.md` |
 | 7 混音 | `fv mix`：旁白＋音樂自動壓低 | — | `references/compose.md` |
 | 8 檢查 | `fv qa`，看縮圖總表 | 全部 ✔ | `references/qa.md` |
 | 9 交付 | `fv master` 出 1080p／720p、字幕檔、引用清單；工具缺陷回寫 repo | 審片意見處理完 | `references/qa.md` |
@@ -34,4 +34,5 @@ description: 製作要交給別人看或在會議上播的正式影片（展示�
 - `fv init <dir>`：從 `templates/project/` 建骨架。
 - `fv voice prep|train|say|asr`：語音，參數見 `references/voice.md`。
 - `fv lint <dir>`、`fv timeline <dir>`、`fv mix <dir>`、`fv qa <mp4> --script <dir>`、`fv master <mp4> <輸出前綴>`。
-- 錄製：影片專案自己裝 `playwright-core`，再 `import { createRecorder, tapMarks } from '$FV/lib/capture.mjs'`。
+- 錄製：影片專案自己裝 `playwright-core`，再 `import { createRecorder, installCursor, tap, shiftClock } from '$FV/lib/capture.mjs'`；時間用 `$FV/lib/narration.mjs` 的 `loadNarration(專案).at(句, 詞)`。
+- 合成：`import { screenClip, callout, calloutIn, calloutOut, checkCallouts, anim, CALLOUT_CSS } from '$FV/lib/hf.mjs'`。

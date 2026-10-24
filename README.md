@@ -4,8 +4,10 @@
 
 ## 摘要
 - 流程寫在 `SKILL.md`（十個階段、每階段的完成條件），細節在 `references/`。
-- `bin/fv.mjs`：環境檢查、建專案、旁白 lint（長度、禁用詞、支語、數字要有出處）、旁白時間表與字幕、混音、品質檢查、響度標準化輸出。
-- `lib/capture.mjs`：用 DevTools 協定逐格錄網頁操作，點擊處加圓點，組成固定幀率的 mp4。
+- `bin/fv.mjs`：環境檢查、建專案、旁白 lint（長度、禁用詞、支語、標點、數字要有出處）、旁白時間表（whisper 逐字對稿）與字幕、混音、品質檢查、響度標準化輸出。
+- `lib/capture.mjs`：用 DevTools 協定逐格錄網頁操作；游標先滑過去、按壓、再點下去（觀眾先看到點擊才換畫面）；錄影時鐘讓每個動作照旁白時間發生；瀏覽器時間平移（`lib/clock-shim.cjs` 給後端用）。
+- `lib/narration.mjs`：查「某句念到某個詞」的時間，錄影與合成共用。
+- `lib/hf.mjs`：HyperFrames 構圖零件：裝置外框裡的錄影、粗框聚光的標註與動畫、標註跨過畫面切換的檢查。
 - `py/`：faster-whisper 辨識、錄音切句對稿、GPT-SoVITS 微調與逐句合成（反聽字錯率自動重試）。
 - 合成用 HyperFrames（Apache-2.0）；聲音用 GPT-SoVITS（MIT）；辨識用 faster-whisper（MIT）；剪接用 FFmpeg。
 
@@ -29,6 +31,7 @@
 - 每支影片的設定在專案的 `video.json`（`templates/project/video.json` 有全部欄位）。
 
 ## 已知限制
-- 中文字幕切行用標點與字數，不做斷詞；長句請在稿裡先拆好。
+- 中文字幕切行用標點與字數，不做斷詞；長句請在稿裡先拆好（「｜」）。
+- 逐字時間靠 whisper 辨識合成語音再對稿；辨識和稿子差很多的句子會印警告，那幾句的時間是內插的。
 - CPU 訓練聲音模型約 40 分鐘（8 核、5 分鐘錄音）。
 - `capture.mjs` 不直接依賴 Playwright：影片專案自己裝 `playwright-core`，把 page 傳進來。

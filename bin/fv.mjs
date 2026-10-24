@@ -15,7 +15,7 @@ const HELP = `formal-video（fv）
   voice prep|train|say|asr|sim    語音：切句對稿／微調／逐句合成／辨識／聲紋相似度（參數見 references/voice.md）
   narrate <專案目錄> [--only L03,L05] [--seed N] [--zero-shot]
                                  照 script.md 逐句合成旁白到 audio/narration/（聲音設定在 video.json 的 voice.dir）
-  timeline <專案目錄>             依旁白長度與停頓排出每句的起點，寫 build/narration.json 與 .srt
+  timeline <專案目錄>             每句的起點與逐字時間（whisper 對稿）、字幕分段，寫 build/narration.json 與 .srt
   mix <專案目錄>                  旁白＋音樂（音樂自動壓在旁白下）→ build/mix.wav
   qa <影片> [--script 專案目錄]    長度、響度、黑畫面、凍結、字幕、反聽字錯率、縮圖總表
   master <影片> <輸出前綴>         響度標準化到 -16 LUFS，輸出 1080p 與 720p 兩個版本
@@ -188,10 +188,13 @@ function lint(dir) {
     for (const c of l.cites) if (!sources.has(c)) problems.push(`${l.id} 引用 ${c} 不在 sources.md`);
     const perLine = video.maxCharsPerLine ?? 32;
     if (l.text.replaceAll('｜', '').length > perLine) problems.push(`${l.id} 一句 ${l.text.length} 字，超過 ${perLine}`);
-    const longest = Math.max(...splitCaption(l.text, video.captionMaxChars ?? 16).map((c) => c.length));
     const clauses = l.text.split(/[｜，。、；：！？]/).filter((c) => c.length > (video.captionMaxChars ?? 16));
     if (clauses.length) problems.push(`${l.id} 字幕會在詞中間斷開（「${clauses[0]}」超過 ${video.captionMaxChars ?? 16} 字）；在稿裡用「｜」標斷點`);
-    void longest;
+    // 旁白也是字幕：分號、冒號在字幕裡很怪（念起來也是一個長停頓），改成句號拆兩句或改寫；中文裡不用半形標點
+    if (/；/.test(l.text)) problems.push(`${l.id} 有分號：改成句號拆成兩句，或改寫成逗號`);
+    if (/：/.test(l.text)) problems.push(`${l.id} 有冒號：改寫（例：「顯示：護理師收到了」→「顯示「護理師收到了」」）`);
+    if (/[㐀-鿿][,.;:!?]|[,.;:!?][㐀-鿿]/.test(l.text)) problems.push(`${l.id} 中文旁混了半形標點，改全形`);
+    if (!/[。！？]$/.test(l.text)) problems.push(`${l.id} 句尾沒有句號、問號或驚嘆號`);
   }
   const [lo, hi] = video.narrationSeconds ?? [0, Infinity];
   console.log(`旁白 ${lines.length} 句，估計 ${total.toFixed(1)} 秒（每秒 ${CHARS_PER_SEC} 字＋停頓）${total < lo || total > hi ? `，不在目標 ${lo}–${hi} 秒內` : ''}`);
@@ -259,59 +262,173 @@ const srtTime = (s) => {
   return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`;
 };
 
-/** 字幕一行不超過 max 字：在標點處切，切不到就平均切 */
+const PUNCT = /[，。、；：！？「」『』（）…—,.;:!?()\s　]/;
+
+/**
+ * 字幕標點（台灣字幕慣例）：句中的逗號、句號、分號、冒號換成全形空白，句尾不留；問號、驚嘆號、頓號、引號照留。
+ * 稿裡不該出現分號、冒號（lint 會擋），這裡仍一併處理，避免漏網。
+ */
+export function captionText(raw) {
+  return raw.replace(/[，。；：,.;:]+/g, '　').replace(/　{2,}/g, '　').replace(/^　+|　+$/g, '');
+}
+
+/**
+ * 旁白切成字幕段：「｜」一定切；否則一個子句（逗號、句號等結尾）一段，4 字以下的短子句併進相鄰那段。
+ * 回傳原文的連續片段（標點還在），接起來等於去掉「｜」的旁白；顯示前再過 captionText。
+ * 一段還是超過 max 的平均切開（lint 會先要求在稿裡標「｜」）。
+ */
 export function splitCaption(text, max = 16) {
   if (text.includes('｜')) return text.split('｜').flatMap((t) => splitCaption(t, max));
-  const parts = [];
-  let buf = '';
-  for (const piece of text.split(/(?<=[，。、；：！？,.;:!?])/)) {
-    if ((buf + piece).replace(/[，。、；：！？]$/, '').length <= max) buf += piece;
-    else {
-      if (buf) parts.push(buf);
-      buf = piece;
+  const core = (s) => s.replace(/[，。、；：！？,.;:!?]+$/, '');
+  const pieces = [];
+  const clauses = text.split(/(?<=[，。；：！？,.;:!?])/).filter((s) => s.trim());
+  let carry = '';
+  clauses.forEach((raw, i) => {
+    const c = carry + raw;
+    carry = '';
+    // 「所以，」「下一步，」這種帶出下文的短句跟下一段走
+    if (core(c).length <= 4 && /[，：,:]$/.test(c) && i + 1 < clauses.length) {
+      carry = c;
+      return;
     }
-  }
-  if (buf) parts.push(buf);
-  return parts.flatMap((p) => {
-    const clean = p.replace(/[，。、；：,.;:]$/, '');
-    if (clean.length <= max) return [clean];
-    const n = Math.ceil(clean.length / max);
-    const size = Math.ceil(clean.length / n);
-    return Array.from({ length: n }, (_, i) => clean.slice(i * size, (i + 1) * size));
+    const prev = pieces.at(-1);
+    if (prev !== undefined && (core(prev).length <= 4 || core(c).length <= 4) && captionText(prev + c).length <= max) pieces[pieces.length - 1] = prev + c;
+    else pieces.push(c);
+  });
+  return pieces.flatMap((p) => {
+    if (captionText(p).length <= max) return [p];
+    const n = Math.ceil(core(p).length / max);
+    const size = Math.ceil(p.length / n);
+    return Array.from({ length: n }, (_, i) => p.slice(i * size, (i + 1) * size));
   });
 }
 
 /**
+ * 稿子每個字對到音檔裡的時間：whisper 的詞（詞內平均分給每個字）與稿子做最長共同子序列，
+ * 對得上的字用辨識的時間；對不上的（同音別字、數字寫法不同、沒念到）在前後對得上的字之間平均內插；標點不佔時間。
+ * 回傳 { chars: [{ c, s, e }]（秒，相對於這一句開頭，長度等於 plain）, matched, total }。
+ */
+export function alignChars(plain, words, secs) {
+  const heard = [];
+  for (const w of words) {
+    const cs = [...w.w].filter((c) => !PUNCT.test(c));
+    cs.forEach((c, k) => heard.push({ c, s: w.s + ((w.e - w.s) * k) / cs.length, e: w.s + ((w.e - w.s) * (k + 1)) / cs.length }));
+  }
+  const chars = [...plain];
+  const idx = chars.map((c, i) => (PUNCT.test(c) ? -1 : i)).filter((i) => i >= 0);
+  const A = idx.map((i) => chars[i].toUpperCase());
+  const B = heard.map((h) => h.c.toUpperCase());
+  const dp = Array.from({ length: A.length + 1 }, () => new Int16Array(B.length + 1));
+  for (let i = A.length - 1; i >= 0; i--) for (let j = B.length - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const match = new Array(A.length).fill(-1);
+  for (let i = 0, j = 0; i < A.length && j < B.length;) {
+    if (A[i] === B[j]) match[i++] = j++;
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+  const times = new Array(A.length);
+  for (let i = 0; i < A.length;) {
+    if (match[i] >= 0) {
+      times[i] = { s: heard[match[i]].s, e: heard[match[i]].e };
+      i++;
+      continue;
+    }
+    let k = i;
+    while (k < A.length && match[k] < 0) k++;
+    const from = i === 0 ? Math.min(heard[0]?.s ?? 0, k < A.length ? heard[match[k]].s : secs) : times[i - 1].e;
+    const to = k < A.length ? heard[match[k]].s : Math.max(from, heard.at(-1)?.e ?? secs);
+    const step = (Math.max(to, from) - from) / (k - i);
+    for (let m = i; m < k; m++) times[m] = { s: from + step * (m - i), e: from + step * (m - i + 1) };
+    i = k;
+  }
+  const out = [];
+  let last = 0;
+  let a = 0;
+  for (let i = 0; i < chars.length; i++) {
+    if (idx[a] === i) {
+      out.push({ c: chars[i], s: times[a].s, e: times[a].e });
+      last = times[a].e;
+      a++;
+    } else out.push({ c: chars[i], s: last, e: last });
+  }
+  return { chars: out, matched: match.filter((m) => m >= 0).length, total: A.length };
+}
+
+/** 沒有 whisper 時的退路：照字數平均分（標點約停一個字的 1 倍） */
+function evenChars(plain, secs) {
+  const chars = [...plain];
+  const total = chars.length;
+  return chars.map((c, i) => {
+    const s = (secs * i) / total;
+    return PUNCT.test(c) ? { c, s, e: s } : { c, s, e: (secs * (i + 1)) / total };
+  });
+}
+
+/** 每一句的逐字辨識（py/words.py），結果快取在 audio/narration/<編號>.words.json */
+function wordTimes(projectDir, lines) {
+  const items = lines.map((l) => ({ wav: join(projectDir, 'audio', 'narration', `${l.id}.wav`), out: join(projectDir, 'audio', 'narration', `${l.id}.words.json`) }));
+  if (!existsSync(PY)) {
+    console.log('⚠ 找不到語音引擎的 Python，字幕與逐字時間改用字數平均分配');
+    return null;
+  }
+  const jobFile = join(projectDir, 'audio', 'narration', 'words-job.json');
+  writeFileSync(jobFile, JSON.stringify({ model: 'large-v3', items }, null, 1));
+  const r = spawnSync(PY, [join(TOOL, 'py', 'words.py'), jobFile], { stdio: 'inherit', env: pyEnv() });
+  if (r.status !== 0) {
+    console.log('⚠ 逐字辨識失敗，字幕與逐字時間改用字數平均分配');
+    return null;
+  }
+  return Object.fromEntries(lines.map((l, i) => [l.id, JSON.parse(readFileSync(items[i].out, 'utf8')).words]));
+}
+
+/**
  * 旁白時間表。音檔在 audio/narration/<編號>.wav；起點：video.json 的 cues 指定的優先（{ "L08": 41.2 }），
- * 其餘接在上一句後面加停頓。字幕依字數比例分配每一段的時間。
+ * 其餘接在上一句後面加停頓。每一句帶逐字時間（chars，全片秒數），lib/narration.mjs 用它查「念到某個詞」；
+ * 字幕每段從它第一個字念出來開始，到下一段開始（最後一段到句尾後 0.25 秒）。
  */
 function timeline(dir) {
   const projectDir = resolve(dir);
   const lines = readNarration(projectDir);
   const video = readVideoJson(projectDir);
   const cues = video.cues ?? {};
+  for (const l of lines) if (!existsSync(join(projectDir, 'audio', 'narration', `${l.id}.wav`))) throw new Error(`沒有 ${l.id}.wav，先跑 fv narrate`);
+  const words = wordTimes(projectDir, lines);
   let t = video.narrationStart ?? 0.6;
   const out = [];
   const srt = [];
+  const weak = [];
   for (const l of lines) {
     const file = join(projectDir, 'audio', 'narration', `${l.id}.wav`);
-    if (!existsSync(file)) throw new Error(`沒有 ${file}，先跑 voice say`);
     const secs = probeSeconds(file);
     if (cues[l.id] !== undefined) {
       if (cues[l.id] < t - 0.05) console.log(`⚠ ${l.id} 指定在 ${cues[l.id]} 秒，但上一句到 ${t.toFixed(2)} 秒才講完`);
       t = cues[l.id];
     }
-    out.push({ id: l.id, section: l.section, text: l.text, file, start: Number(t.toFixed(3)), end: Number((t + secs).toFixed(3)) });
+    const plain = l.text.replaceAll('｜', '');
+    let rel;
+    if (words) {
+      const a = alignChars(plain, words[l.id], secs);
+      rel = a.chars;
+      if (a.matched < a.total * 0.7) weak.push(`${l.id}（${a.matched}/${a.total} 字對得上）`);
+    } else rel = evenChars(plain, secs);
+    const chars = rel.map((c) => ({ c: c.c, s: Number((t + c.s).toFixed(3)), e: Number((t + c.e).toFixed(3)) }));
+    out.push({ id: l.id, section: l.section, text: l.text, file, start: Number(t.toFixed(3)), end: Number((t + secs).toFixed(3)), chars });
     const parts = splitCaption(l.text, video.captionMaxChars ?? 16);
-    const totalChars = parts.reduce((n, p) => n + p.length, 0);
-    let c = t;
-    for (const p of parts) {
-      const d = (secs * p.length) / totalChars;
-      srt.push({ start: c, end: c + d, text: p });
-      c += d;
-    }
+    let off = 0;
+    const starts = parts.map((p) => {
+      const first = [...p].findIndex((c) => !PUNCT.test(c));
+      const s = chars[off + Math.max(0, first)].s;
+      off += [...p].length;
+      return s;
+    });
+    parts.forEach((p, i) => {
+      const s = i === 0 ? Math.min(starts[0], t + 0.05) : starts[i];
+      const e = i + 1 < parts.length ? starts[i + 1] : t + secs + 0.25;
+      srt.push({ start: Number(s.toFixed(3)), end: Number(e.toFixed(3)), text: captionText(p) });
+    });
     t += secs + l.pause;
   }
+  if (weak.length) console.log(`⚠ 這幾句辨識和稿子差很多，逐字時間多半是內插的，念到的詞請自己聽一下：${weak.join('、')}`);
   mkdirSync(join(projectDir, 'build'), { recursive: true });
   writeFileSync(join(projectDir, 'build', 'narration.json'), JSON.stringify({ lines: out, captions: srt, end: t }, null, 1));
   writeFileSync(join(projectDir, 'build', 'captions.srt'), srt.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${s.text}\n`).join('\n'));
@@ -406,15 +523,21 @@ function qa(file, args) {
     const toS = (t) => { const [h, m, s] = t.replace(',', '.').split(':').map(Number); return h * 3600 + m * 60 + s; };
     let worst = 0;
     let longest = 0;
+    let shortest = Infinity;
+    const badPunct = [];
     for (const b of blocks) {
       const [, time, ...txt] = b.split(/\r?\n/);
       const [a, z] = time.split(' --> ').map(toS);
       const t = txt.join('');
       longest = Math.max(longest, ...txt.map((x) => x.length));
       worst = Math.max(worst, t.length / Math.max(0.1, z - a));
+      shortest = Math.min(shortest, z - a);
+      if (/[，。；：,.;:]/.test(t)) badPunct.push(t);
     }
     add(longest <= (cfg.captionMaxChars ?? 16), `字幕最長一行 ${longest} 字`);
     add(worst <= (cfg.captionMaxCps ?? 7), `字幕最快每秒 ${worst.toFixed(1)} 字（上限 ${cfg.captionMaxCps ?? 7}）`);
+    add(shortest >= 0.8, `字幕最短停留 ${shortest.toFixed(2)} 秒（下限 0.8）`);
+    add(badPunct.length === 0, `字幕裡的逗號、句號、分號、冒號 ${badPunct.length} 段${badPunct.length ? `：${badPunct.slice(0, 3).join('／')}` : ''}（台灣字幕慣例以全形空白代替）`);
   }
   // 縮圖總表：每 2 秒一格，給人審片
   const sheet = video.replace(/\.[^.]+$/, '.contact.jpg');
