@@ -1,0 +1,7 @@
+{
+  "target": "skills/formal-video",
+  "exclude": [
+    "py/__pycache__/",
+    "engines/gpt-sovits/shim/jieba_fast/__pycache__/"
+  ]
+}

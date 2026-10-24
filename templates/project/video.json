@@ -1,0 +1,18 @@
+{
+  "title": "",
+  "durationRange": [120, 180],
+  "narrationSeconds": [100, 150],
+  "narrationStart": 0.6,
+  "cues": {},
+  "bannedTerms": [],
+  "numbersWithoutCitation": [],
+  "captionMaxChars": 16,
+  "captionMaxCps": 7,
+  "maxCharsPerLine": 32,
+  "loudness": -16,
+  "truePeak": -1.5,
+  "maxFreezeSeconds": 6,
+  "hyperframes": "0.8.143",
+  "voice": { "dir": "", "refAudio": "", "refText": "", "speed": 1.0, "maxCer": 0.05 },
+  "music": { "file": "", "gainDb": -20, "fadeIn": 1.5, "fadeOut": 3, "license": "" }
+}
