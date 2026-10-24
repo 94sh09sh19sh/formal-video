@@ -25,6 +25,7 @@
    - `engines/GPT-SoVITS`（git clone 上游）、`engines/gsv-venv`（安裝步驟見 `references/voice.md`）
    - `hf-cache/`（whisper 模型第一次用時自動下載）
 3. `node bin/fv.mjs doctor` 全部打勾。
+4. 建議一起裝 [cache-guard](https://github.com/94sh09sh19sh/cache-guard)：訓練、算圖這類超過 1 小時的背景工作，等待期間由它保溫，回來接結果時不用整段重寫快取。
 
 ## 設定
 - `config.local.json`（執行端，不進 repo）：`engines`、`ffmpeg`、`hyperframes`（版本）。

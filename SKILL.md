@@ -15,6 +15,7 @@ description: 製作要交給別人看或在會議上播的正式影片（展示�
 3. 數字與事實只用原始出處（`references/facts.md`）；查不到就不上片。
 4. 用語照使用者的語言規範；台灣用語時 `fv lint` 會跑支語檢查。
 5. 片中不能出現的事（例：經費）寫進 `video.json` 的 `bannedTerms`，由 lint 擋。
+6. 省快取：可能超過 10 分鐘的指令（`voice train`、長音檔 `voice asr`、全片 `narrate`、`render`）用 Bash `run_in_background` 跑，結束本回合等通知，不要前景跑到逾時再重跑；等待期間由 cache-guard 保溫。要逐張看的畫面（錄影檢查、`snapshot --review`、抽格）交給子代理看，或先拼成一張總表再看；主對話累積約 60 張圖後，Claude Code 每移除一張舊圖就整段快取重寫。
 
 ## 十個階段
 | 階段 | 做什麼 | 完成條件 | 細節 |
